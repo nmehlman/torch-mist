@@ -42,7 +42,16 @@ class L1Out(ConditionalGenerativeMIEstimator):
 
         # Probability of all the other y in the same batch [M, N, ...]
         p_Y_given_x = self.q_Y_given_X.condition(x)
-        log_p_y_given_x = p_Y_given_x.log_prob(y.unsqueeze(1) + x.detach() * 0)
+
+        # Broadcast y across the M (candidate) dimension of x. This is done
+        # via an explicit expand over the batch dims only (not the trailing
+        # feature dim), so x and y are allowed to have different feature
+        # dimensionality.
+        y = y.unsqueeze(1)
+        batch_shape = torch.broadcast_shapes(x.shape[:-1], y.shape[:-1])
+        y = y.expand(*batch_shape, y.shape[-1])
+
+        log_p_y_given_x = p_Y_given_x.log_prob(y)
 
         if self.neg_samples == -1:
             D = torch.eye(N).to(y.device)
