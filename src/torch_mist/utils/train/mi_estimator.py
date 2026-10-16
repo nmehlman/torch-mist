@@ -58,6 +58,8 @@ def train_mi_estimator(
     early_stopping: bool = False,
     patience: Optional[int] = None,
     tolerance: float = 0.001,
+    early_stopping_method: Optional[str] = "loss",
+    early_stopping_mode: Optional[str] = "min",
     fast_train: bool = False,
     train_logged_methods: Optional[
         List[Union[str, Tuple[str, Callable]]]
@@ -99,6 +101,8 @@ def train_mi_estimator(
         early_stopping=early_stopping,
         patience=patience,
         tolerance=tolerance,
+        early_stopping_method=early_stopping_method,
+        early_stopping_mode=early_stopping_mode,
         batch_size=batch_size,
         max_epochs=max_epochs,
         lr_annealing=lr_annealing,

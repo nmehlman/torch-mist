@@ -166,7 +166,9 @@ def validate(
 
 
 def is_early_stopping_possible(
-    valid_loader_missing: bool, eval_method_missing: bool, bound: bool
+    valid_loader_missing: bool,
+    eval_method_missing: bool,
+    mode: Optional[str],
 ) -> bool:
     if valid_loader_missing:
         print(
@@ -174,13 +176,19 @@ def is_early_stopping_possible(
         )
         return False
     if eval_method_missing:
-        print("[Warning]: Please specify eval_method to use early_stopping.")
-        return False
-    if not bound:
         print(
-            "[Warning]: early_stopping can be used only when maximize=True or minimize=True."
+            "[Warning]: Please specify eval_method or early_stopping_method to use early_stopping."
         )
         return False
+    if mode is None:
+        print(
+            "[Warning]: early_stopping requires early_stopping_mode='max' or 'min', or a model that is a lower or upper bound."
+        )
+        return False
+    if mode not in ("max", "min"):
+        raise ValueError(
+            f"early_stopping_mode must be 'max' or 'min', got {mode}"
+        )
     return True
 
 
@@ -230,6 +238,8 @@ def train_model(
     early_stopping: bool = False,
     patience: Optional[int] = None,
     tolerance: float = 0.001,
+    early_stopping_method: Optional[str] = None,
+    early_stopping_mode: Optional[str] = None,
     fast_train: bool = False,
     train_logged_methods: Optional[
         List[Union[str, Tuple[str, Callable]]]
@@ -247,12 +257,21 @@ def train_model(
         num_workers=num_workers,
     )
 
+    # By default, early stopping monitors eval_method, maximized for lower bounds and minimized for upper bounds
+    if early_stopping_method is None:
+        early_stopping_method = eval_method
+    if early_stopping_mode is None:
+        if model.lower_bound:
+            early_stopping_mode = "max"
+        elif model.upper_bound:
+            early_stopping_mode = "min"
+
     # Check if early stopping is possible
     if early_stopping:
         early_stopping = is_early_stopping_possible(
             valid_loader_missing=valid_loader is None,
-            eval_method_missing=eval_method is None,
-            bound=model.lower_bound or model.upper_bound,
+            eval_method_missing=early_stopping_method is None,
+            mode=early_stopping_mode,
         )
 
     # Determine the training duration
@@ -304,8 +323,8 @@ def train_model(
         patience=patience,
         warmup_iterations=warmup_iterations,
         max_iterations=max_iterations,
-        maximize=model.lower_bound,
-        minimize=model.upper_bound,
+        maximize=early_stopping and early_stopping_mode == "max",
+        minimize=early_stopping and early_stopping_mode == "min",
         verbose=verbose,
     )
 
@@ -348,6 +367,21 @@ def train_model(
             eval_logged_methods=eval_logged_methods,
         )
 
+        # Compute the score monitored by early stopping, if it differs from the validation score
+        if early_stopping and early_stopping_method != (
+            eval_method if eval_method else train_method
+        ):
+            stopping_score = validate(
+                model=model,
+                eval_method=early_stopping_method,
+                valid_loader=valid_loader,
+                device=device,
+                logger=logger,
+                eval_logged_methods=[early_stopping_method],
+            )
+        else:
+            stopping_score = valid_score
+
         # Update the bars
         if tqdm_epochs:
             if valid_score:
@@ -355,6 +389,10 @@ def train_model(
                     f"valid_{eval_method if eval_method else train_method}: {np.round(valid_score,3)}"
                 ]
                 if early_stopping:
+                    if stopping_score is not valid_score:
+                        s += [
+                            f"valid_{early_stopping_method}: {np.round(stopping_score,3)}"
+                        ]
                     s += [f"patience: {run_manager.current_patience}"]
                     s += [f"best_value: {np.round(run_manager.best_value,3)}"]
                 tqdm_epochs.set_postfix_str(", ".join(s))
@@ -362,7 +400,7 @@ def train_model(
 
         # Determine if the training is over
         if run_manager.should_stop(
-            iteration=logger._iteration, score=valid_score, model=model
+            iteration=logger._iteration, score=stopping_score, model=model
         ):
             break
 
