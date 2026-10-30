@@ -1,6 +1,7 @@
 from copy import deepcopy
 from typing import Callable, TypeVar, Dict, Any
 import inspect
+import weakref
 
 import torch
 from torch import nn
@@ -48,21 +49,23 @@ def cached_method(method: Callable[..., T]) -> Callable[..., T]:
             self.__cache = {}
             self.__cache_stats = {}
 
-            if hasattr(self, "__getstate__"):
-                original_getstate = self.__getstate__
-            else:
-                original_getstate = None
+            # Look up the class-level __getstate__ and hold self only through a weakref: a bound method or a closure
+            # over self, stored on self, makes a reference cycle that keeps the cached tensors (and their autograd
+            # graphs) alive until Python's cyclic GC runs, which leaks GPU memory between collections
+            original_getstate = getattr(type(self), "__getstate__", None)
+            self_ref = weakref.ref(self)
 
             # Wrap the get_state method to exclude the cache
             def wrapped_getstate():
-                # delete_cache_hook(self)
+                self = self_ref()
                 if original_getstate is None:
-                    state = self.__dict__
+                    state = self.__dict__.copy()
                 else:
-                    state = original_getstate()
+                    state = original_getstate(self)
 
+                # Drop the wrapper itself, so copies fall back to their class's __getstate__
                 if "__getstate__" in state:
-                    state["__getstate__"] = original_getstate
+                    del state["__getstate__"]
                 if "__cache" in state:
                     del state["__cache"]
                 if "__cache_stats" in state:
